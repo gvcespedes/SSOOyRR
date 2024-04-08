@@ -1,0 +1,166 @@
+#include <stdio.h>	// FILE, fopen, fclose, etc.
+#include <stdlib.h> // malloc, calloc, free, etc
+#include "../file_manager/manager.h"
+#include <time.h>
+#include <unistd.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/wait.h>
+
+int signal_received = 0;
+int amount_pr;
+int max_pr;
+
+typedef struct  Process
+{
+	int pid;
+	double begin;
+	double time;
+	int exit_code;
+	char* path;
+	int cant_args;
+	char** argv;
+	int status;
+	int is_fork_first;
+	int is_finished;
+	int is_max_time; // 0 en caso de que no se cumple el time max; 1 proceso tiene 10 segundos terminar
+	double timeout;
+} Process;
+
+void sighandler(int signalNumber) {
+	signal_received = 1;
+	printf("Received signal: %d\n", signalNumber);
+}
+
+int main(int argc, char const *argv[])
+{
+	/*Rescato valores de consola*/
+	int amount_pr = atoi(argv[3]);
+	if (argc == 5){
+		max_pr = atoi(argv[4]);
+	}
+	printf("soy el amount %d\n", amount_pr);
+	printf("soy el max %d\n", max_pr);
+	
+	/*Lectura del input*/
+	char *file_name = (char *)argv[1];
+	InputFile *input_file = read_file(file_name);
+	// hacer el output
+
+	/*Mostramos el archivo de input en consola*/
+
+	printf("Cantidad de lineas: %d\n", input_file->len);
+	Process* process_array[input_file->len];
+	for (int i = 0; i < input_file->len; ++i)
+	{
+		Process* p = calloc(1, sizeof(Process));
+		p->path = input_file->lines[i][1];
+		p->argv = &(input_file->lines[i][2]);
+		p->is_finished = 0;
+		p->is_fork_first = 0;
+		p->cant_args = atoi(input_file->lines[i][0]); //cant. argumentos que tiene el proceso
+		if (p->cant_args == -1){
+			p->timeout = atoi(input_file->lines[i][2]);
+		}
+		process_array[i] = p;
+	}
+
+	int signal_just_received = 0;
+	int max_alcanzado = 0;
+	int progs_running = 0;
+	int timeout_listo = 0;
+	double timeout_inicio;
+	double max_time_min;
+	clock_t start_runner = clock();
+	double signal_clock;
+	int loop_largo = 1;
+	int contador_finished = 0;
+	while (loop_largo == 1) {
+		signal(SIGTSTP, sighandler); //recibe señal ctrl + z
+		if (signal_received == 1 && signal_just_received == 0){
+			signal_just_received = 1;
+			signal_clock = clock();
+			for (int l = 0; l < input_file->len; ++l){
+				if (process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 0){
+					process_array[l]->is_max_time = 1;
+					kill(process_array[l]->pid, SIGINT);
+				}
+			}
+		}
+		if (signal_just_received == 1 && (clock() - signal_clock)/CLOCKS_PER_SEC >= 10){
+			for (int l = 0; l < input_file->len; ++l){
+				if (process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0){
+					kill(process_array[l]->pid, SIGKILL);
+				}
+			}
+		}
+		for (int k = 0; k < input_file->len; ++k){
+			if (max_pr > 0 && max_pr <= ((double)clock() - start_runner)/CLOCKS_PER_SEC && max_alcanzado == 0){
+				max_alcanzado = 1;
+				max_time_min = clock();
+				for (int l = 0; l < input_file->len; ++l){
+			 		if (process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 0){
+						process_array[l]->is_max_time = 1;
+						kill(process_array[l]->pid, SIGINT);
+					}
+			 	}
+			}
+			if (max_alcanzado == 1 && ((double)clock() - max_time_min)/CLOCKS_PER_SEC >= 10){
+				if (process_array[k]->is_max_time == 1){
+					kill(process_array[k]->pid, SIGTERM);
+				}
+			}
+			if (process_array[k]->cant_args == -1){
+				//if (max_pr > 0 && max_pr <= ((double)clock() - start_runner)/CLOCKS_PER_SEC && max_alcanzado == 0){}
+				timeout_inicio = clock();
+				//si max se cumple antes que timeout, hago solo max
+				while (timeout_listo == 0){	
+					if (max_pr > 0 && max_pr <= ((double)clock() - start_runner)/CLOCKS_PER_SEC){
+						timeout_listo = 1;
+					}
+					else if (((double)clock() - timeout_inicio)/CLOCKS_PER_SEC >= process_array[k]->timeout){
+						for (int m = 0; m < input_file->len; ++m){
+							if (process_array[m]->is_fork_first == 1 && process_array[m]->is_finished == 0){
+								kill(process_array[m]->pid, SIGKILL);
+							}
+						}
+						timeout_listo = 1;
+					}
+				}
+			}
+			if (process_array[k]->is_fork_first == 0 && progs_running < amount_pr){
+				progs_running ++;
+				pid_t pid = fork();
+				process_array[k]->begin = clock();
+				process_array[k]->is_fork_first = 1;
+				// suma nuevo proceso hijo en memoria
+				if (pid == 0){ //es el hijo
+					execve(process_array[k]->path, process_array[k]->argv, NULL);
+				}
+				else {
+					process_array[k]->pid = pid;
+				}
+			} 
+			else if (process_array[k]->is_fork_first == 1 && process_array[k]->is_finished == 0) {
+				int status;
+				int wait_result = waitpid(process_array[k]->pid, &status, WNOHANG);
+				if (wait_result > 0) {
+					process_array[k]->status = status;
+					process_array[k]->time = ((double)clock() - process_array[k]->begin)/CLOCKS_PER_SEC;
+					process_array[k]->is_finished = 1;
+					contador_finished ++;
+					progs_running --;
+					//printf("proceso %s de id %d tiene tiempo %f\n", process_array[k]->path, process_array[k]->pid, process_array[k]->time);
+					printf("proceso %s de id %d tiene kill %d y tiempo %f\n", process_array[k]->path, process_array[k]->pid, process_array[k]->is_max_time, process_array[k]->time);
+				}
+			}
+			if (contador_finished == input_file->len) {
+				loop_largo = 0;
+				// aquí falta imprimir las estadisitcas
+				// fprintf()
+				// WEXITSTATUS
+			}
+		}
+	}
+	input_file_destroy(input_file);
+}
