@@ -72,18 +72,20 @@ int main(int argc, char const *argv[])
 	int progs_running = 0;
 	int timeout_listo = 0;
 	double timeout_inicio;
-	double max_time_min;
+	double time_since_max;
 	clock_t start_runner = clock();
 	double signal_clock;
 	int loop_largo = 1;
 	int contador_finished = 0;
 	while (loop_largo == 1) {
+
+		/*manejo de señal ctrl + z*/
 		signal(SIGTSTP, sighandler); //recibe señal ctrl + z
 		if (signal_received == 1 && signal_just_received == 0){
 			signal_just_received = 1;
 			signal_clock = clock();
 			for (int l = 0; l < input_file->len; ++l){
-				if (process_array[l]->cant_args >= -1 && process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 0){
+				if (process_array[l]->cant_args > -1 && process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 0){
 					process_array[l]->is_max_time = 1;
 					kill(process_array[l]->pid, SIGINT);
 				}
@@ -91,17 +93,38 @@ int main(int argc, char const *argv[])
 		}
 		if (signal_just_received == 1 && (clock() - signal_clock)/CLOCKS_PER_SEC >= 10){
 			for (int l = 0; l < input_file->len; ++l){
-				if (process_array[l]->cant_args >= -1 && process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 1){
+				if (process_array[l]->cant_args > -1 && process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 1){
 					kill(process_array[l]->pid, SIGKILL);
 				}
 			}
 		}
+		
+		/*manejo de arg max en programas corriendo*/
+		if (max_pr > 0 && max_pr <= ((double)clock() - start_runner)/CLOCKS_PER_SEC && max_alcanzado == 0){
+			printf("alcancé el máximo");
+			max_alcanzado = 1;
+			time_since_max = clock();
+			for (int l = 0; l < input_file->len; ++l){
+				if (process_array[l]->cant_args > -1 && process_array[l]->is_fork_first == 1 && process_array[l]->is_finished == 0 && process_array[l]->is_max_time == 0){
+					process_array[l]->is_max_time = 1;
+					kill(process_array[l]->pid, SIGINT);
+				}
+			}
+		}
+		if (max_alcanzado == 1 && ((double)clock() - time_since_max)/CLOCKS_PER_SEC >= 10){
+			for (int l = 0; l < input_file->len; ++l){
+				if (process_array[l]->cant_args > -1 && process_array[l]->is_max_time == 1 && process_array[l]->is_finished == 0){
+					kill(process_array[l]->pid, SIGTERM);
+				}
+			}
+		}		
+
 	 	for (int k = 0; k < input_file->len; ++k){
 			if (process_array[k]->cant_args == -1 && process_array[k]->wait_ejecutado == 0){
 				process_array[k]->wait_ejecutado = 1;
 				contador_finished ++;
 			}
-			if (process_array[k]->cant_args >= -1 && process_array[k]->is_fork_first == 0 && progs_running < amount_pr){
+			if (process_array[k]->cant_args > -1 && process_array[k]->is_fork_first == 0 && progs_running < amount_pr){
 				progs_running ++;
 				pid_t pid = fork();
 				process_array[k]->begin = (double)clock(); //tiempo en que inicia el child
@@ -113,7 +136,7 @@ int main(int argc, char const *argv[])
 					process_array[k]->pid = pid;
 				}
 			} 
-			if (process_array[k]->cant_args >= -1 && process_array[k]->is_fork_first == 1 && process_array[k]->is_finished == 0) {
+			if (process_array[k]->cant_args > -1 && process_array[k]->is_fork_first == 1 && process_array[k]->is_finished == 0) {
 				int status;
 				int wait_result = waitpid(process_array[k]->pid, &status, WNOHANG);
 				if (wait_result > 0) {
