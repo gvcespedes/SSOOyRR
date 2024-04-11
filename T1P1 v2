@@ -192,6 +192,10 @@ int main(int argc, char const *argv[])
 		}
 	}
 
+	for (int i = 0; i < input_file->len; ++i){
+		free(process_array[i]);
+	}
+
 	input_file_destroy(input_file);
 	fclose(output_file);
 }
